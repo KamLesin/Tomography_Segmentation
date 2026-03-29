@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs and checkpoints
+runs/
+legacy runs/
+*.log
+
+# Data outputs (keep out of git by default)
+../Full_data_converted/
+Full_data_converted/
+
+# OS
+.DS_Store
+Thumbs.db
