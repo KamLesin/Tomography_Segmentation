@@ -1,0 +1,39 @@
+experiment_name: multiphase_2p5d_latefusion
+seed: 42
+
+model:
+  in_channels_per_phase: 5
+  out_channels: 1
+  pretrained_encoder: false
+  encoder_backbone: resnet34   # resnet34 | resnet18 | efficientnet_b0
+  fusion_mode: cross_attention   # cross_attention | concat
+  attention_heads: 8
+  attention_dropout: 0.0
+
+data:
+  mode: mixed                    # cect | full | mixed
+  cect_root: ../CECT_data_aligned
+  full_root: ../full_data_converted_aligned
+  missing_phase_strategy: keep   # drop | keep
+  training_cache_enabled: true
+  training_cache_root: runs/cache_npz
+  training_cache_dtype: float32  # float32 | float16
+  training_cache_version: v1
+  training_cache_rebuild: false
+  context_slices: 2
+  image_size: [320, 320]
+  hu_window: [-200.0, 300.0]
+  max_train_slices_per_patient: 80
+  max_val_slices_per_patient: 120
+  cache_items: 8
+
+train:
+  epochs: 40
+  batch_size: 8
+  lr: 0.0001
+  min_lr: 0.000001
+  weight_decay: 0.0001
+  dice_weight: 0.5
+  amp: true
+  num_workers: 4
+  pin_memory: true

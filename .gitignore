@@ -20,6 +20,7 @@ legacy runs/
 # Data outputs (keep out of git by default)
 ../Full_data_converted/
 Full_data_converted/
+/generated_helper_csv_files
 
 # OS
 .DS_Store
