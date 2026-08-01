@@ -30,7 +30,7 @@ data:
 
 train:
   epochs: 40
-  batch_size: 12
+  batch_size: 16
   lr: 0.0001
   min_lr: 0.000001
   weight_decay: 0.0001
