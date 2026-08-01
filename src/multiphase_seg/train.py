@@ -189,6 +189,11 @@ def run_fold_training(
         fusion_mode=str(model_cfg.get("fusion_mode", "cross_attention")),
         attention_heads=int(model_cfg.get("attention_heads", 8)),
         attention_dropout=float(model_cfg.get("attention_dropout", 0.0)),
+        attention_max_tokens=(
+            None
+            if model_cfg.get("attention_max_tokens") is None
+            else int(model_cfg.get("attention_max_tokens", 4096))
+        ),
     ).to(device)
 
     dl_train, dl_val = _build_dataloaders(cfg, fold, folds_df)

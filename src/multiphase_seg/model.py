@@ -22,6 +22,7 @@ class MultiphaseLateFusionUNet(nn.Module):
         fusion_mode: str = "cross_attention",
         attention_heads: int = 8,
         attention_dropout: float = 0.0,
+        attention_max_tokens: int | None = 4096,
     ) -> None:
         super().__init__()
         self.encoder_backbone = encoder_backbone
@@ -36,6 +37,7 @@ class MultiphaseLateFusionUNet(nn.Module):
             mode=fusion_mode,
             num_heads=attention_heads,
             dropout=attention_dropout,
+            attention_max_tokens=attention_max_tokens,
         )
 
         fused_channels = [3 * c for c in self.encoders.feature_channels]

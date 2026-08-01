@@ -9,10 +9,18 @@ from torch import nn
 class PairwiseCrossAttention(nn.Module):
     """Cross-attention block for one feature scale."""
 
-    def __init__(self, channels: int, num_heads: int = 8, dropout: float = 0.0) -> None:
+    def __init__(
+        self,
+        channels: int,
+        num_heads: int = 8,
+        dropout: float = 0.0,
+        max_tokens: int | None = 4096,
+    ) -> None:
         super().__init__()
         if channels % num_heads != 0:
             num_heads = 1
+
+        self.max_tokens = max_tokens
 
         self.attn_ab = nn.MultiheadAttention(channels, num_heads, dropout=dropout, batch_first=True)
         self.attn_ac = nn.MultiheadAttention(channels, num_heads, dropout=dropout, batch_first=True)
@@ -44,6 +52,12 @@ class PairwiseCrossAttention(nn.Module):
         feat_c: torch.Tensor,
         phase_present: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # Full attention scales as O((H*W)^2) in memory/time. For large maps
+        # this becomes impractical, so fall back to identity at that scale.
+        n_tokens = int(feat_a.shape[2] * feat_a.shape[3])
+        if self.max_tokens is not None and n_tokens > int(self.max_tokens):
+            return feat_a, feat_b, feat_c
+
         a, hw = self._to_tokens(feat_a)
         b, _ = self._to_tokens(feat_b)
         c, _ = self._to_tokens(feat_c)
@@ -102,6 +116,7 @@ class MultiScaleFusion(nn.Module):
         mode: str = "cross_attention",
         num_heads: int = 8,
         dropout: float = 0.0,
+        attention_max_tokens: int | None = 4096,
     ) -> None:
         super().__init__()
         self.mode = mode
@@ -110,9 +125,15 @@ class MultiScaleFusion(nn.Module):
             raise ValueError(f"Unsupported fusion mode: {mode}")
 
         if mode == "cross_attention":
-            self.blocks = nn.ModuleList(
-                [PairwiseCrossAttention(channels=c, num_heads=num_heads, dropout=dropout) for c in channels_per_scale]
-            )
+            self.blocks = nn.ModuleList([
+                PairwiseCrossAttention(
+                    channels=c,
+                    num_heads=num_heads,
+                    dropout=dropout,
+                    max_tokens=attention_max_tokens,
+                )
+                for c in channels_per_scale
+            ])
         else:
             self.blocks = nn.ModuleList([nn.Identity() for _ in channels_per_scale])
 
