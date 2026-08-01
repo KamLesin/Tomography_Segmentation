@@ -180,8 +180,14 @@ class PhaseEncoders(nn.Module):
         w4 = self._down_size(w3)
 
         sizes = [(h0, w0), (h1, w1), (h2, w2), (h3, w3), (h4, w4)]
+        dtype = x.dtype
+        if torch.is_autocast_enabled():
+            if x.device.type == "cuda":
+                dtype = torch.get_autocast_gpu_dtype()
+            elif x.device.type == "cpu":
+                dtype = torch.get_autocast_cpu_dtype()
         return [
-            torch.zeros((b, c, hs, ws), dtype=x.dtype, device=x.device)
+            torch.zeros((b, c, hs, ws), dtype=dtype, device=x.device)
             for c, (hs, ws) in zip(self.feature_channels, sizes)
         ]
 
@@ -200,6 +206,8 @@ class PhaseEncoders(nn.Module):
         idx = torch.where(present_mask)[0]
         present_feats = encoder(x.index_select(0, idx))
         for scale_idx, fmap in enumerate(present_feats):
+            if feats[scale_idx].dtype != fmap.dtype:
+                feats[scale_idx] = feats[scale_idx].to(dtype=fmap.dtype)
             feats[scale_idx][idx] = fmap
         return feats
 
