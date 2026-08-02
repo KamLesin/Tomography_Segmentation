@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 from threading import Lock
+import traceback
 from typing import List
 
 import pandas as pd
@@ -31,6 +32,10 @@ def _run_folds_for_gpu(gpu_id: str, fold_queue: List[int], lock: Lock, args: arg
                 return
             fold = fold_queue.pop(0)
 
+        fold_dir = Path(args.output_dir) / f"fold_{int(fold):02d}"
+        fold_dir.mkdir(parents=True, exist_ok=True)
+        launcher_log_path = fold_dir / "launcher.log"
+
         cmd = [
             args.python,
             str(ROOT / "scripts" / "training" / "train_cv.py"),
@@ -50,9 +55,22 @@ def _run_folds_for_gpu(gpu_id: str, fold_queue: List[int], lock: Lock, args: arg
         env["CUDA_VISIBLE_DEVICES"] = gpu_id
 
         print(f"[GPU {gpu_id}] Starting fold {fold}")
-        proc = subprocess.run(cmd, cwd=str(ROOT), env=env, check=False)
+        proc = subprocess.run(cmd, cwd=str(ROOT), env=env, check=False, capture_output=True, text=True)
+
+        with open(launcher_log_path, "w", encoding="utf-8") as f:
+            f.write(f"gpu_id={gpu_id}\n")
+            f.write(f"returncode={proc.returncode}\n")
+            f.write("command=\n")
+            f.write(" ".join(cmd) + "\n\n")
+            f.write("=== STDOUT ===\n")
+            f.write(proc.stdout or "")
+            f.write("\n\n=== STDERR ===\n")
+            f.write(proc.stderr or "")
+
         if proc.returncode != 0:
-            raise RuntimeError(f"Fold {fold} failed on GPU {gpu_id} with code {proc.returncode}")
+            raise RuntimeError(
+                f"Fold {fold} failed on GPU {gpu_id} with code {proc.returncode}. See {launcher_log_path}"
+            )
         print(f"[GPU {gpu_id}] Finished fold {fold}")
 
 
@@ -60,7 +78,17 @@ def _run_folds_for_gpu(gpu_id: str, fold_queue: List[int], lock: Lock, args: arg
 def main() -> None:
     args = parse_args()
     df = pd.read_csv(args.folds_csv)
+    if df.empty:
+        raise ValueError(
+            f"Folds CSV has no rows: {args.folds_csv}. Generate folds first with scripts/training/make_cv_folds.py."
+        )
+    if "fold" not in df.columns:
+        raise ValueError(f"Missing required 'fold' column in folds CSV: {args.folds_csv}")
     folds = sorted(df["fold"].unique().tolist())
+    if not folds:
+        raise ValueError(
+            f"No unique fold IDs found in {args.folds_csv}. Check the CSV content and generation step."
+        )
     gpu_ids = [g.strip() for g in args.gpus.split(",") if g.strip()]
     if not gpu_ids:
         raise ValueError("No GPUs specified")
@@ -69,13 +97,18 @@ def main() -> None:
     fold_queue = list(folds)
     lock = Lock()
 
-    print(f"Folds queue: {fold_queue}")
+    print(f"Folds queue ({len(fold_queue)}): {fold_queue}")
     print(f"GPUs: {gpu_ids}")
 
-    with ThreadPoolExecutor(max_workers=len(gpu_ids)) as pool:
-        futures = [pool.submit(_run_folds_for_gpu, gpu, fold_queue, lock, args) for gpu in gpu_ids]
-        for fut in futures:
-            fut.result()
+    try:
+        with ThreadPoolExecutor(max_workers=len(gpu_ids)) as pool:
+            futures = [pool.submit(_run_folds_for_gpu, gpu, fold_queue, lock, args) for gpu in gpu_ids]
+            for fut in futures:
+                fut.result()
+    except Exception:
+        print("Launcher failed. Traceback:")
+        print(traceback.format_exc())
+        raise
 
     print("All assigned folds finished successfully.")
 

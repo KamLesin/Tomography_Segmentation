@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
+import traceback
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -177,109 +178,133 @@ def run_fold_training(
 
     folds_df = pd.read_csv(folds_csv)
 
+    out_fold = Path(output_dir) / f"fold_{fold:02d}"
+    out_fold.mkdir(parents=True, exist_ok=True)
+
     device = torch.device(device_override) if device_override else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_cfg = cfg["model"]
     train_cfg = cfg["train"]
 
-    model = MultiphaseLateFusionUNet(
-        in_channels_per_phase=int(model_cfg.get("in_channels_per_phase", 5)),
-        out_channels=int(model_cfg.get("out_channels", 1)),
-        pretrained_encoder=bool(model_cfg.get("pretrained_encoder", False)),
-        encoder_backbone=str(model_cfg.get("encoder_backbone", "resnet34")),
-        fusion_mode=str(model_cfg.get("fusion_mode", "cross_attention")),
-        attention_heads=int(model_cfg.get("attention_heads", 8)),
-        attention_dropout=float(model_cfg.get("attention_dropout", 0.0)),
-        attention_max_tokens=(
-            None
-            if model_cfg.get("attention_max_tokens") is None
-            else int(model_cfg.get("attention_max_tokens", 4096))
-        ),
-    ).to(device)
+    try:
+        model = MultiphaseLateFusionUNet(
+            in_channels_per_phase=int(model_cfg.get("in_channels_per_phase", 5)),
+            out_channels=int(model_cfg.get("out_channels", 1)),
+            pretrained_encoder=bool(model_cfg.get("pretrained_encoder", False)),
+            encoder_backbone=str(model_cfg.get("encoder_backbone", "resnet34")),
+            fusion_mode=str(model_cfg.get("fusion_mode", "cross_attention")),
+            attention_heads=int(model_cfg.get("attention_heads", 8)),
+            attention_dropout=float(model_cfg.get("attention_dropout", 0.0)),
+            attention_max_tokens=(
+                None
+                if model_cfg.get("attention_max_tokens") is None
+                else int(model_cfg.get("attention_max_tokens", 4096))
+            ),
+        ).to(device)
 
-    dl_train, dl_val = _build_dataloaders(cfg, fold, folds_df)
+        dl_train, dl_val = _build_dataloaders(cfg, fold, folds_df)
+        train_size = len(dl_train.dataset)
+        val_size = len(dl_val.dataset)
+        if train_size == 0 or val_size == 0:
+            raise ValueError(
+                "Empty dataset split after fold filtering. "
+                f"train_samples={train_size}, val_samples={val_size}, fold={fold}. "
+                "Check: folds CSV patient_uids, data roots in config, and missing_phase_strategy/force_phase_input settings."
+            )
+        print(f"[fold={fold}] train_samples={train_size}, val_samples={val_size}")
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=float(train_cfg.get("lr", 1e-4)),
-        weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=int(train_cfg.get("epochs", 40)),
-        eta_min=float(train_cfg.get("min_lr", 1e-6)),
-    )
-
-    out_fold = Path(output_dir) / f"fold_{fold:02d}"
-    out_fold.mkdir(parents=True, exist_ok=True)
-
-    best_val_dice = -1.0
-    history = []
-
-    epochs = int(train_cfg.get("epochs", 40))
-    dice_weight = float(train_cfg.get("dice_weight", 0.5))
-    amp_enabled = bool(train_cfg.get("amp", True)) and device.type == "cuda"
-    eval_phase_override = train_cfg.get("eval_phase_override")
-
-    for epoch in range(1, epochs + 1):
-        train_loss, train_dice, train_cache_hit_rate = _run_epoch(
-            model,
-            dl_train,
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=float(train_cfg.get("lr", 1e-4)),
+            weight_decay=float(train_cfg.get("weight_decay", 1e-4)),
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            device,
-            dice_weight=dice_weight,
-            amp_enabled=amp_enabled,
-            eval_phase_override=None,
+            T_max=int(train_cfg.get("epochs", 40)),
+            eta_min=float(train_cfg.get("min_lr", 1e-6)),
         )
 
-        with torch.no_grad():
-            val_loss, val_dice, val_cache_hit_rate = _run_epoch(
+        best_val_dice = -1.0
+        history = []
+
+        epochs = int(train_cfg.get("epochs", 40))
+        dice_weight = float(train_cfg.get("dice_weight", 0.5))
+        amp_enabled = bool(train_cfg.get("amp", True)) and device.type == "cuda"
+        eval_phase_override = train_cfg.get("eval_phase_override")
+
+        for epoch in range(1, epochs + 1):
+            train_loss, train_dice, train_cache_hit_rate = _run_epoch(
                 model,
-                dl_val,
-                optimizer=None,
-                device=device,
+                dl_train,
+                optimizer,
+                device,
                 dice_weight=dice_weight,
                 amp_enabled=amp_enabled,
-                eval_phase_override=eval_phase_override,
+                eval_phase_override=None,
             )
 
-        scheduler.step()
+            with torch.no_grad():
+                val_loss, val_dice, val_cache_hit_rate = _run_epoch(
+                    model,
+                    dl_val,
+                    optimizer=None,
+                    device=device,
+                    dice_weight=dice_weight,
+                    amp_enabled=amp_enabled,
+                    eval_phase_override=eval_phase_override,
+                )
 
-        row = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "train_dice": train_dice,
-            "train_cache_hit_rate": train_cache_hit_rate,
-            "val_loss": val_loss,
-            "val_dice": val_dice,
-            "val_cache_hit_rate": val_cache_hit_rate,
-            "lr": float(optimizer.param_groups[0]["lr"]),
+            scheduler.step()
+
+            row = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_dice": train_dice,
+                "train_cache_hit_rate": train_cache_hit_rate,
+                "val_loss": val_loss,
+                "val_dice": val_dice,
+                "val_cache_hit_rate": val_cache_hit_rate,
+                "lr": float(optimizer.param_groups[0]["lr"]),
+            }
+            history.append(row)
+
+            torch.save({"model": model.state_dict(), "epoch": epoch, "metrics": row}, out_fold / "last.pt")
+
+            if val_dice > best_val_dice:
+                best_val_dice = val_dice
+                torch.save({"model": model.state_dict(), "epoch": epoch, "metrics": row}, out_fold / "best.pt")
+
+            print(
+                f"[fold={fold}] epoch={epoch:03d} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
+                f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} "
+                f"train_cache_hit_rate={train_cache_hit_rate:.3f} val_cache_hit_rate={val_cache_hit_rate:.3f}"
+            )
+
+        history_path = out_fold / "history.json"
+        with open(history_path, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+
+        result = {
+            "fold": fold,
+            "best_val_dice": best_val_dice,
+            "history_path": str(history_path),
+            "output_dir": str(out_fold),
         }
-        history.append(row)
 
-        torch.save({"model": model.state_dict(), "epoch": epoch, "metrics": row}, out_fold / "last.pt")
+        with open(out_fold / "result.json", "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2)
 
-        if val_dice > best_val_dice:
-            best_val_dice = val_dice
-            torch.save({"model": model.state_dict(), "epoch": epoch, "metrics": row}, out_fold / "best.pt")
-
-        print(
-            f"[fold={fold}] epoch={epoch:03d} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
-            f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} "
-            f"train_cache_hit_rate={train_cache_hit_rate:.3f} val_cache_hit_rate={val_cache_hit_rate:.3f}"
-        )
-
-    history_path = out_fold / "history.json"
-    with open(history_path, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
-
-    result = {
-        "fold": fold,
-        "best_val_dice": best_val_dice,
-        "history_path": str(history_path),
-        "output_dir": str(out_fold),
-    }
-
-    with open(out_fold / "result.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
-
-    return result
+        return result
+    except Exception as exc:
+        error_payload = {
+            "fold": int(fold),
+            "config_path": str(config_path),
+            "folds_csv": str(folds_csv),
+            "output_dir": str(out_fold),
+            "device": str(device),
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        with open(out_fold / "error.json", "w", encoding="utf-8") as f:
+            json.dump(error_payload, f, indent=2)
+        raise
