@@ -215,7 +215,7 @@ def run_fold_training(
                 f"train_samples={train_size}, val_samples={val_size}, fold={fold}. "
                 "Check: folds CSV patient_uids, data roots in config, and missing_phase_strategy/force_phase_input settings."
             )
-        print(f"[fold={fold}] train_samples={train_size}, val_samples={val_size}")
+        print(f"[fold={fold}] train_samples={train_size}, val_samples={val_size}", flush=True)
 
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -292,7 +292,7 @@ def run_fold_training(
                     f"train_loss={train_loss:.4f} train_dice={train_dice:.4f} best_train_dice={best_train_dice:.4f} "
                     f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} best_val_dice={best_val_dice:.4f} "
                     f"train_cache_hit_rate={train_cache_hit_rate:.3f} val_cache_hit_rate={val_cache_hit_rate:.3f}"
-                )
+                , flush=True)
 
         history_path = out_fold / "history.json"
         with open(history_path, "w", encoding="utf-8") as f:

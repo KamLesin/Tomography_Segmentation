@@ -78,8 +78,9 @@ def _run_folds_for_gpu(gpu_id: str, fold_queue: List[int], lock: Lock, args: arg
 
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = gpu_id
+        env["PYTHONUNBUFFERED"] = "1"
 
-        print(f"[GPU {gpu_id}] Starting fold {fold}")
+        print(f"[GPU {gpu_id}] Starting fold {fold}", flush=True)
         with open(launcher_log_path, "w", encoding="utf-8") as f:
             f.write(f"gpu_id={gpu_id}\n")
             f.write("command=\n")
@@ -96,7 +97,7 @@ def _run_folds_for_gpu(gpu_id: str, fold_queue: List[int], lock: Lock, args: arg
             text=True,
             bufsize=1,
         )
-        print(f"{prefix} started")
+        print(f"{prefix} started", flush=True)
         _stream_process_output(proc, launcher_log_path, prefix)
         proc.wait()
 
@@ -107,7 +108,7 @@ def _run_folds_for_gpu(gpu_id: str, fold_queue: List[int], lock: Lock, args: arg
             raise RuntimeError(
                 f"Fold {fold} failed on GPU {gpu_id} with code {proc.returncode}. See {launcher_log_path}"
             )
-        print(f"{prefix} finished")
+        print(f"{prefix} finished", flush=True)
 
 
 
@@ -133,8 +134,8 @@ def main() -> None:
     fold_queue = list(folds)
     lock = Lock()
 
-    print(f"Folds queue ({len(fold_queue)}): {fold_queue}")
-    print(f"GPUs: {gpu_ids}")
+    print(f"Folds queue ({len(fold_queue)}): {fold_queue}", flush=True)
+    print(f"GPUs: {gpu_ids}", flush=True)
 
     try:
         with ThreadPoolExecutor(max_workers=len(gpu_ids)) as pool:
@@ -142,11 +143,11 @@ def main() -> None:
             for fut in futures:
                 fut.result()
     except Exception:
-        print("Launcher failed. Traceback:")
-        print(traceback.format_exc())
+        print("Launcher failed. Traceback:", flush=True)
+        print(traceback.format_exc(), flush=True)
         raise
 
-    print("All assigned folds finished successfully.")
+    print("All assigned folds finished successfully.", flush=True)
 
 
 if __name__ == "__main__":
