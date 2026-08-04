@@ -15,6 +15,30 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _should_show_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("%"):
+        return False
+    if stripped.startswith("[GPU "):
+        return False
+    return True
+
+
+def _prefix_line(line: str, prefix: str) -> str:
+    return f"{prefix} {line}" if line.endswith("\n") else f"{prefix} {line}\n"
+
+
+def _stream_process_output(proc: subprocess.Popen[str], log_path: Path, prefix: str) -> None:
+    assert proc.stdout is not None
+    with open(log_path, "a", encoding="utf-8") as log_file:
+        for line in proc.stdout:
+            log_file.write(line)
+            if _should_show_line(line):
+                print(_prefix_line(line.rstrip("\n"), prefix), end="")
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Launch CV fold training across multiple GPUs")
     p.add_argument("--folds-csv", type=Path, required=True)
@@ -55,23 +79,34 @@ def _run_folds_for_gpu(gpu_id: str, fold_queue: List[int], lock: Lock, args: arg
         env["CUDA_VISIBLE_DEVICES"] = gpu_id
 
         print(f"[GPU {gpu_id}] Starting fold {fold}")
-        proc = subprocess.run(cmd, cwd=str(ROOT), env=env, check=False, capture_output=True, text=True)
-
         with open(launcher_log_path, "w", encoding="utf-8") as f:
             f.write(f"gpu_id={gpu_id}\n")
-            f.write(f"returncode={proc.returncode}\n")
             f.write("command=\n")
             f.write(" ".join(cmd) + "\n\n")
-            f.write("=== STDOUT ===\n")
-            f.write(proc.stdout or "")
-            f.write("\n\n=== STDERR ===\n")
-            f.write(proc.stderr or "")
+            f.write("=== STREAMED OUTPUT ===\n")
+
+        prefix = f"[GPU {gpu_id} fold {fold:02d}]"
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        print(f"{prefix} started")
+        _stream_process_output(proc, launcher_log_path, prefix)
+        proc.wait()
+
+        with open(launcher_log_path, "a", encoding="utf-8") as f:
+            f.write(f"\n\nreturncode={proc.returncode}\n")
 
         if proc.returncode != 0:
             raise RuntimeError(
                 f"Fold {fold} failed on GPU {gpu_id} with code {proc.returncode}. See {launcher_log_path}"
             )
-        print(f"[GPU {gpu_id}] Finished fold {fold}")
+        print(f"{prefix} finished")
 
 
 
