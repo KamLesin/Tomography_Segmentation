@@ -280,6 +280,7 @@ def _run_arm(
 
 def _plot_fold_boxplot(df: pd.DataFrame, output_path: Path, title: str) -> None:
     try:
+        import inspect
         import matplotlib.pyplot as plt
     except ImportError as exc:
         raise RuntimeError("matplotlib is required to generate hypothesis plots") from exc
@@ -293,22 +294,26 @@ def _plot_fold_boxplot(df: pd.DataFrame, output_path: Path, title: str) -> None:
 
     fig, ax = plt.subplots(figsize=(11, 6))
     positions = np.arange(1, len(arms) + 1)
-    ax.boxplot(
-        values_per_arm,
-        labels=arms,
-        positions=positions,
-        showmeans=True,
-        patch_artist=True,
-        medianprops={"color": "black", "linewidth": 1.8},
-        meanprops={
+    boxplot_kwargs = {
+        "positions": positions,
+        "showmeans": True,
+        "patch_artist": True,
+        "medianprops": {"color": "black", "linewidth": 1.8},
+        "meanprops": {
             "marker": "D",
             "markerfacecolor": "white",
             "markeredgecolor": "black",
             "markersize": 5,
         },
-        boxprops={"facecolor": "#b8d8ea", "alpha": 0.9},
-        whiskerprops={"linewidth": 1.3},
-        capprops={"linewidth": 1.3},
+        "boxprops": {"facecolor": "#b8d8ea", "alpha": 0.9},
+        "whiskerprops": {"linewidth": 1.3},
+        "capprops": {"linewidth": 1.3},
+    }
+    label_param = "tick_labels" if "tick_labels" in inspect.signature(ax.boxplot).parameters else "labels"
+    boxplot_kwargs[label_param] = arms
+    ax.boxplot(
+        values_per_arm,
+        **boxplot_kwargs,
     )
 
     # Keep per-fold visibility by overlaying jittered points on top of each box.
