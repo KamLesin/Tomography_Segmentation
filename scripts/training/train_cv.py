@@ -19,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fold", type=int, required=True)
     p.add_argument("--output-dir", type=Path, default=Path("runs/multiphase_cv"))
     p.add_argument("--device", type=str, default=None)
+    p.add_argument("--no-batch-progress", action="store_true", help="Disable per-batch tqdm progress bars")
     return p.parse_args()
 
 
@@ -30,6 +31,7 @@ def main() -> None:
         fold=args.fold,
         output_dir=args.output_dir,
         device_override=args.device,
+        show_batch_progress=not args.no_batch_progress,
     )
     print(result)
 

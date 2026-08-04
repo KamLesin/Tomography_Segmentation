@@ -122,6 +122,8 @@ def _run_epoch(
     dice_weight: float,
     amp_enabled: bool,
     eval_phase_override: Optional[str] = None,
+    show_progress: bool = True,
+    progress_label: Optional[str] = None,
 ):
     is_train = optimizer is not None
     model.train(is_train)
@@ -132,7 +134,8 @@ def _run_epoch(
 
     scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled and is_train)
 
-    for batch in tqdm(loader, leave=False):
+    iterator = tqdm(loader, leave=False, disable=not show_progress, desc=progress_label)
+    for batch in iterator:
         x = batch["phases"].to(device, non_blocking=True)
         y = batch["mask"].to(device, non_blocking=True)
         phase_present = batch["phase_present"].to(device, non_blocking=True) > 0.5
@@ -172,6 +175,8 @@ def run_fold_training(
     fold: int,
     output_dir: Path,
     device_override: Optional[str] = None,
+    show_batch_progress: bool = True,
+    epoch_log_interval: int = 1,
 ) -> Dict[str, Any]:
     cfg = load_config(config_path)
     seed_everything(int(cfg.get("seed", 42)))
@@ -224,6 +229,7 @@ def run_fold_training(
         )
 
         best_val_dice = -1.0
+        best_train_dice = -1.0
         history = []
 
         epochs = int(train_cfg.get("epochs", 40))
@@ -240,6 +246,8 @@ def run_fold_training(
                 dice_weight=dice_weight,
                 amp_enabled=amp_enabled,
                 eval_phase_override=None,
+                show_progress=show_batch_progress,
+                progress_label=f"train fold {fold:02d} epoch {epoch:03d}/{epochs}",
             )
 
             with torch.no_grad():
@@ -251,6 +259,8 @@ def run_fold_training(
                     dice_weight=dice_weight,
                     amp_enabled=amp_enabled,
                     eval_phase_override=eval_phase_override,
+                    show_progress=show_batch_progress,
+                    progress_label=f"val fold {fold:02d} epoch {epoch:03d}/{epochs}",
                 )
 
             scheduler.step()
@@ -273,11 +283,16 @@ def run_fold_training(
                 best_val_dice = val_dice
                 torch.save({"model": model.state_dict(), "epoch": epoch, "metrics": row}, out_fold / "best.pt")
 
-            print(
-                f"[fold={fold}] epoch={epoch:03d} train_loss={train_loss:.4f} train_dice={train_dice:.4f} "
-                f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} "
-                f"train_cache_hit_rate={train_cache_hit_rate:.3f} val_cache_hit_rate={val_cache_hit_rate:.3f}"
-            )
+            if train_dice > best_train_dice:
+                best_train_dice = train_dice
+
+            if epoch_log_interval > 0 and (epoch % epoch_log_interval == 0 or epoch == 1 or epoch == epochs):
+                print(
+                    f"[fold={fold}] epoch={epoch:03d}/{epochs} "
+                    f"train_loss={train_loss:.4f} train_dice={train_dice:.4f} best_train_dice={best_train_dice:.4f} "
+                    f"val_loss={val_loss:.4f} val_dice={val_dice:.4f} best_val_dice={best_val_dice:.4f} "
+                    f"train_cache_hit_rate={train_cache_hit_rate:.3f} val_cache_hit_rate={val_cache_hit_rate:.3f}"
+                )
 
         history_path = out_fold / "history.json"
         with open(history_path, "w", encoding="utf-8") as f:

@@ -73,6 +73,7 @@ def _run_folds_for_gpu(gpu_id: str, fold_queue: List[int], lock: Lock, args: arg
             str(args.output_dir),
             "--device",
             "cuda:0",
+            "--no-batch-progress",
         ]
 
         env = os.environ.copy()
