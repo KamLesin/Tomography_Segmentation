@@ -5,6 +5,7 @@ import copy
 import json
 from datetime import datetime
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -39,6 +40,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--unaligned-cect-root", type=str, default=None)
     p.add_argument("--unaligned-full-root", type=str, default=None)
     p.add_argument("--run-name", type=str, default=None)
+    p.add_argument(
+        "--reuse-results-from",
+        type=Path,
+        default=None,
+        help="Optional path to a previous hypothesis run directory (or fold_results.csv) whose arm outputs can be reused",
+    )
+    p.add_argument(
+        "--reuse-results-arm",
+        type=str,
+        default=None,
+        help="Optional arm name in the source run to reuse. Defaults to the current arm name.",
+    )
     return p.parse_args()
 
 
@@ -101,6 +114,101 @@ def _discover_folds(folds_csv: Path, max_folds: Optional[int]) -> List[int]:
     if not folds:
         raise ValueError("No folds found for execution")
     return [int(x) for x in folds]
+
+
+def _copy_reused_fold_outputs(source_arm_dir: Path, target_arm_dir: Path, folds: List[int]) -> bool:
+    target_arm_dir.mkdir(parents=True, exist_ok=True)
+    for fold in folds:
+        fold_tag = f"fold_{int(fold):02d}"
+        source_fold_dir = source_arm_dir / fold_tag
+        target_fold_dir = target_arm_dir / fold_tag
+        target_fold_dir.mkdir(parents=True, exist_ok=True)
+
+        source_result_path = source_fold_dir / "result.json"
+        if not source_result_path.exists():
+            return False
+        shutil.copy2(source_result_path, target_fold_dir / "result.json")
+
+        source_history_path = source_fold_dir / "history.json"
+        if source_history_path.exists():
+            shutil.copy2(source_history_path, target_fold_dir / "history.json")
+
+    return True
+
+
+def _load_reused_arm_rows(
+    arm_name: str,
+    folds: List[int],
+    arm_output: Path,
+    reuse_results_from: Optional[Path],
+    reuse_results_arm: Optional[str],
+) -> Optional[List[Dict[str, Any]]]:
+    if not reuse_results_from:
+        return None
+
+    source_path = reuse_results_from.expanduser()
+    if not source_path.exists():
+        return None
+
+    source_dir = source_path if source_path.is_dir() else source_path.parent
+    source_arm_name = reuse_results_arm or arm_name
+    source_arm_dir = source_dir / "arms" / source_arm_name
+
+    if source_arm_dir.exists() and _copy_reused_fold_outputs(source_arm_dir, arm_output, folds):
+        arm_rows: List[Dict[str, Any]] = []
+        for fold in folds:
+            fold_tag = f"fold_{int(fold):02d}"
+            result_path = arm_output / fold_tag / "result.json"
+            if not result_path.exists():
+                raise FileNotFoundError(f"Missing reused result file for arm={arm_name}, fold={fold}: {result_path}")
+            with open(result_path, "r", encoding="utf-8") as f:
+                result = json.load(f)
+            arm_rows.append(
+                {
+                    "arm": arm_name,
+                    "fold": int(fold),
+                    "best_val_dice": float(result["best_val_dice"]),
+                    "result_json": str(result_path),
+                    "history_json": str(result.get("history_path", arm_output / fold_tag / "history.json")),
+                }
+            )
+        return arm_rows
+
+    source_csv_path = source_dir / "fold_results.csv"
+    if source_csv_path.exists():
+        df = pd.read_csv(source_csv_path)
+        subset = df[(df["arm"] == source_arm_name) & (df["fold"].isin(folds))]
+        if len(subset) == len(folds):
+            arm_rows = []
+            for fold in folds:
+                row = subset.loc[subset["fold"] == fold]
+                if row.empty:
+                    return None
+                result_path = Path(row.iloc[0]["result_json"])
+                if not result_path.exists():
+                    return None
+                history_path = row.iloc[0].get("history_json")
+                if history_path:
+                    history_path = Path(history_path)
+                else:
+                    history_path = result_path.with_name("history.json")
+                target_result_path = arm_output / f"fold_{int(fold):02d}" / "result.json"
+                target_result_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(result_path, target_result_path)
+                if history_path.exists():
+                    shutil.copy2(history_path, target_result_path.with_name("history.json"))
+                arm_rows.append(
+                    {
+                        "arm": arm_name,
+                        "fold": int(fold),
+                        "best_val_dice": float(row.iloc[0]["best_val_dice"]),
+                        "result_json": str(target_result_path),
+                        "history_json": str(target_result_path.with_name("history.json")),
+                    }
+                )
+            return arm_rows
+
+    return None
 
 
 def _build_h1_or_h3_arms(base_cfg: Dict[str, Any], phase: str, hypothesis: str) -> List[Tuple[str, Dict[str, Any]]]:
@@ -201,12 +309,25 @@ def _run_arm(
     device: Optional[str],
     gpus: Optional[str],
     python_exe: str,
+    reuse_results_from: Optional[Path],
+    reuse_results_arm: Optional[str],
 ) -> List[Dict[str, Any]]:
     cfg_path = run_dir / "configs" / f"{arm_name}.yaml"
     dump_yaml(cfg_path, cfg)
 
     arm_output = run_dir / "arms" / arm_name
     arm_output.mkdir(parents=True, exist_ok=True)
+
+    reused_rows = _load_reused_arm_rows(
+        arm_name=arm_name,
+        folds=folds,
+        arm_output=arm_output,
+        reuse_results_from=reuse_results_from,
+        reuse_results_arm=reuse_results_arm,
+    )
+    if reused_rows is not None:
+        print(f"[{arm_name}] reusing prior results from {reuse_results_from} (source arm={reuse_results_arm or arm_name})")
+        return reused_rows
 
     if gpus:
         folds_df = pd.read_csv(folds_csv)
@@ -352,6 +473,7 @@ def main() -> None:
     config_path = _resolve_project_path(args.config)
     folds_csv_path = _resolve_project_path(args.folds_csv)
     output_root = _resolve_project_path(args.output_dir)
+    reuse_results_from = _resolve_project_path(args.reuse_results_from) if args.reuse_results_from else None
 
     base_cfg = load_yaml(config_path)
     folds = _discover_folds(folds_csv_path, args.max_folds)
@@ -374,6 +496,8 @@ def main() -> None:
             device=args.device,
             gpus=args.gpus,
             python_exe=args.python,
+            reuse_results_from=reuse_results_from,
+            reuse_results_arm=args.reuse_results_arm,
         )
         all_rows.extend(rows)
 
