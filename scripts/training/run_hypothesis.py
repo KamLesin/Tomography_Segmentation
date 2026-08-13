@@ -52,6 +52,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional arm name in the source run to reuse. Defaults to the current arm name.",
     )
+    p.add_argument(
+        "--reuse-arm-map",
+        type=str,
+        action="append",
+        default=[],
+        help=(
+            "Optional per-arm mapping in format target_arm=source_arm. "
+            "Can be provided multiple times. Example: "
+            "--reuse-arm-map small_single_phase=baseline_single_phase"
+        ),
+    )
     return p.parse_args()
 
 
@@ -114,6 +125,27 @@ def _discover_folds(folds_csv: Path, max_folds: Optional[int]) -> List[int]:
     if not folds:
         raise ValueError("No folds found for execution")
     return [int(x) for x in folds]
+
+
+def _parse_reuse_arm_map(entries: List[str]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for raw in entries:
+        item = str(raw).strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(
+                f"Invalid --reuse-arm-map entry: {raw}. Expected format target_arm=source_arm"
+            )
+        target_arm, source_arm = item.split("=", 1)
+        target_arm = target_arm.strip()
+        source_arm = source_arm.strip()
+        if not target_arm or not source_arm:
+            raise ValueError(
+                f"Invalid --reuse-arm-map entry: {raw}. Expected format target_arm=source_arm"
+            )
+        mapping[target_arm] = source_arm
+    return mapping
 
 
 def _copy_reused_fold_outputs(source_arm_dir: Path, target_arm_dir: Path, folds: List[int]) -> bool:
@@ -474,6 +506,7 @@ def main() -> None:
     folds_csv_path = _resolve_project_path(args.folds_csv)
     output_root = _resolve_project_path(args.output_dir)
     reuse_results_from = _resolve_project_path(args.reuse_results_from) if args.reuse_results_from else None
+    reuse_arm_map = _parse_reuse_arm_map(args.reuse_arm_map)
 
     base_cfg = load_yaml(config_path)
     folds = _discover_folds(folds_csv_path, args.max_folds)
@@ -487,6 +520,7 @@ def main() -> None:
 
     all_rows: List[Dict[str, Any]] = []
     for arm_name, cfg in arms:
+        reuse_results_arm = reuse_arm_map.get(arm_name, args.reuse_results_arm)
         rows = _run_arm(
             arm_name=arm_name,
             cfg=cfg,
@@ -497,7 +531,7 @@ def main() -> None:
             gpus=args.gpus,
             python_exe=args.python,
             reuse_results_from=reuse_results_from,
-            reuse_results_arm=args.reuse_results_arm,
+            reuse_results_arm=reuse_results_arm,
         )
         all_rows.extend(rows)
 

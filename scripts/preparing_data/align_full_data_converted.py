@@ -789,6 +789,11 @@ def main() -> None:
         action="store_true",
         help="When --labels-only is used, overwrite already existing output label files.",
     )
+    parser.add_argument(
+        "--skip-registration",
+        action="store_true",
+        help="Skip ANTs/SimpleITK registration and keep each series in its resampled but unregistered geometry.",
+    )
     args = parser.parse_args()
 
     dicom_roots = [Path(p) for p in args.dicom_roots.split(";") if p]
@@ -974,7 +979,10 @@ def main() -> None:
             if args.ants_mask == "liver":
                 ants_mask_xyz = to_xyz(ref_union_mask) if ref_union_mask is not None else None
 
-            if ants is not None:
+            if args.skip_registration:
+                aligned_xyz = mov_xyz
+                transform_type = "none:skip_registration"
+            elif ants is not None:
                 aligned_xyz, transform_type, transform_params = register_antspy(
                     ref_xyz,
                     mov_xyz,
