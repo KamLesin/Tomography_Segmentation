@@ -556,7 +556,22 @@ class MultiphaseSliceDataset(Dataset):
 
         img = nib.load(str(path))
         arr = np.asarray(img.get_fdata(dtype=np.float32))
-        arr = np.squeeze(arr)
+        if arr.ndim != 3:
+            arr = np.squeeze(arr)
+        if arr.ndim == 4 and 3 in arr.shape:
+            component_axis = next((axis for axis, size in enumerate(arr.shape) if size == 3), None)
+            if component_axis is not None:
+                if is_mask:
+                    arr = np.max(arr, axis=component_axis)
+                else:
+                    components = np.moveaxis(arr, component_axis, -1)
+                    if np.allclose(components[..., 0], components[..., 1], atol=1e-5) and np.allclose(
+                        components[..., 0], components[..., 2], atol=1e-5
+                    ):
+                        arr = components[..., 0]
+                    else:
+                        arr = np.mean(components, axis=-1)
+                arr = np.squeeze(arr)
         if arr.ndim != 3:
             raise ValueError(f"Expected 3D NIfTI volume, got shape {arr.shape} for {path}")
 
