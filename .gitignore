@@ -16,6 +16,7 @@ venv/
 runs/
 legacy runs/
 *.log
+results/
 
 # Data outputs (keep out of git by default)
 ../Full_data_converted/

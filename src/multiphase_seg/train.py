@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from collections import Counter
 from pathlib import Path
 import traceback
 from typing import Any, Dict, Optional
@@ -13,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import yaml
 
-from .data import MultiphaseSliceDataset, build_patient_records
+from .data import MultiphaseSliceDataset, build_patient_records, canonicalize_patient_uid
 from .losses import bce_dice_loss
 from .metrics import dice_coefficient
 from .model import MultiphaseLateFusionUNet
@@ -47,6 +48,14 @@ def _build_dataloaders(cfg: Dict[str, Any], fold: int, folds_df: pd.DataFrame):
 
     val_uids = set(folds_df.loc[folds_df["fold"] == fold, "patient_uid"].tolist())
     train_uids = set(folds_df.loc[folds_df["fold"] != fold, "patient_uid"].tolist())
+    record_uids = {canonicalize_patient_uid(record.patient_uid) for record in records}
+    manifest_uids = {canonicalize_patient_uid(uid) for uid in folds_df["patient_uid"]}
+    unmatched_uids = sorted(manifest_uids - record_uids)
+    if unmatched_uids:
+        raise ValueError(
+            f"Fold manifest contains {len(unmatched_uids)} patient UIDs not present in the configured data roots. "
+            f"Examples: {unmatched_uids[:5]}"
+        )
 
     ds_train = MultiphaseSliceDataset(
         records,
@@ -78,6 +87,46 @@ def _build_dataloaders(cfg: Dict[str, Any], fold: int, folds_df: pd.DataFrame):
         cache_version=str(data_cfg.get("training_cache_version", "v1")),
         rebuild_cache=bool(data_cfg.get("training_cache_rebuild", False)),
         force_phase_input=data_cfg.get("force_phase_input"),
+    )
+
+    def source_counts(dataset_records: Any) -> Dict[str, int]:
+        return dict(Counter(record.source for record in dataset_records))
+
+    def phase_counts(dataset_records: Any) -> Dict[str, int]:
+        return {
+            "all_A_PV_D": sum(
+                all(record.image_paths.get(slot) is not None for slot in ("A", "PV", "D"))
+                for record in dataset_records
+            ),
+            "missing_one_or_more": sum(
+                any(record.image_paths.get(slot) is None for slot in ("A", "PV", "D"))
+                for record in dataset_records
+            ),
+        }
+
+    print(
+        "[data-audit] "
+        f"cect_root={data_cfg.get('cect_root')} "
+        f"full_root={data_cfg.get('full_root')} "
+        f"records={len(records)} "
+        f"manifest_uids={len(manifest_uids)} "
+        f"unmatched_uids={len(unmatched_uids)} "
+        f"record_sources={source_counts(records)} "
+        f"record_phases={phase_counts(records)}",
+        flush=True,
+    )
+    print(
+        "[data-audit] "
+        f"fold={fold} "
+        f"train_records={len(ds_train.records)} "
+        f"val_records={len(ds_val.records)} "
+        f"train_sources={source_counts(ds_train.records)} "
+        f"val_sources={source_counts(ds_val.records)} "
+        f"train_phases={phase_counts(ds_train.records)} "
+        f"val_phases={phase_counts(ds_val.records)} "
+        f"train_samples={len(ds_train)} "
+        f"val_samples={len(ds_val)}",
+        flush=True,
     )
 
     dl_train = DataLoader(

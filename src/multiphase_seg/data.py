@@ -22,6 +22,11 @@ PHASE_SLOT_CANDIDATES: Dict[str, Tuple[str, ...]] = {
 }
 
 
+def canonicalize_patient_uid(patient_uid: str) -> str:
+    """Normalize manifest and filesystem UIDs for matching."""
+    return str(patient_uid).strip().casefold()
+
+
 @dataclass
 class PatientRecord:
     patient_uid: str
@@ -372,8 +377,8 @@ class MultiphaseSliceDataset(Dataset):
         self.force_phase_input = self._normalize_force_phase(force_phase_input)
 
         if patient_uids is not None:
-            uid_set = set(patient_uids)
-            self.records = [r for r in records if r.patient_uid in uid_set]
+            uid_set = {canonicalize_patient_uid(uid) for uid in patient_uids}
+            self.records = [r for r in records if canonicalize_patient_uid(r.patient_uid) in uid_set]
         else:
             self.records = list(records)
 
