@@ -41,6 +41,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--unaligned-full-root", type=str, default=None)
     p.add_argument("--run-name", type=str, default=None)
     p.add_argument(
+        "--arms",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Optional subset of arm names to actually run (train or reuse). Defaults to all arms for the hypothesis.",
+    )
+    p.add_argument(
         "--reuse-results-from",
         type=Path,
         default=None,
@@ -517,6 +524,13 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     arms = build_arms(base_cfg, args)
+    if args.arms:
+        wanted = set(args.arms)
+        available = {name for name, _ in arms}
+        missing = wanted - available
+        if missing:
+            raise ValueError(f"Unknown --arms values {sorted(missing)}; available arms are {sorted(available)}")
+        arms = [(name, cfg) for name, cfg in arms if name in wanted]
 
     all_rows: List[Dict[str, Any]] = []
     for arm_name, cfg in arms:
