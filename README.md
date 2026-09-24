@@ -152,12 +152,6 @@ Set in [config/training/multiphase_default.yaml](config/training/multiphase_defa
 - `model.fusion_mode: cross_attention` (default),
 - `model.fusion_mode: concat` for no-attention baseline.
 
-## CV and storage recommendations
-
-- Practical CV for segmentation is usually `5-10` folds. Very high fold counts (36/48/64) often produce very small validation sets and unstable metrics, while massively increasing runtime.
-- Start with 8 folds (good fit for 8 GPUs), then optionally repeat with another seed for robustness.
-- Keep NIfTI as source-of-truth (no metadata loss). If IO becomes bottleneck, add a cache layer (`.npz` or chunked `zarr`) generated from NIfTI with unchanged voxel values and spacing metadata stored alongside.
-
 ## Main scripts
 
 - [scripts/preparing_data/align_full_data_converted.py](scripts/preparing_data/align_full_data_converted.py): align or correct converted slice data.
@@ -190,6 +184,3 @@ Keep generated datasets and temporary outputs out of git. The existing [.gitigno
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
 
-## CI
-
-GitHub Actions is configured in [.github/workflows/ci.yml](.github/workflows/ci.yml).
