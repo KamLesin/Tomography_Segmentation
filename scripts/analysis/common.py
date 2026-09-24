@@ -16,9 +16,19 @@ if str(SRC) not in sys.path:
 
 
 def resolve_path(path_like: Any, base: Path = ROOT) -> Path:
-    """Resolve a possibly-relative path against the repo root (tomography_segmentation/)."""
+    """Resolve a possibly-relative path against cwd or repo root (tomography_segmentation/)."""
+    if path_like is None:
+        return None
     p = Path(str(path_like))
-    return p if p.is_absolute() else (base / p).resolve()
+    if p.is_absolute():
+        return p
+    cwd_p = (Path.cwd() / p).resolve()
+    if cwd_p.exists():
+        return cwd_p
+    base_p = (base / p).resolve()
+    if base_p.exists():
+        return base_p
+    return cwd_p
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
