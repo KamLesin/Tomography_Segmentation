@@ -11,17 +11,52 @@ import pandas as pd
 from .data import PatientRecord
 
 
+def _lesion_voxels(rec: PatientRecord) -> int:
+    path = _first_existing_path([rec.mask_paths.get(s) for s in ("PV", "A", "D")])
+    return int(_safe_mask_stats(path, compute_components=False)["lesion_voxels"])
+
+
+def _assign_balanced_by_lesion(
+    buckets: Dict[str, List[PatientRecord]],
+    n_folds: int,
+    rng: random.Random,
+) -> List[Dict[str, int | str]]:
+    """Greedy assignment: largest lesions first, each into the fold with the smallest
+    total lesion volume among folds that still have capacity (keeps fold sizes within 1)."""
+    items = [(rec, _lesion_voxels(rec)) for bucket in buckets.values() for rec in bucket]
+    rng.shuffle(items)  # random tie-breaking
+    items.sort(key=lambda t: t[1], reverse=True)
+
+    capacity = -(-len(items) // n_folds)
+    counts = [0] * n_folds
+    volumes = [0] * n_folds
+    rows = []
+    for rec, vox in items:
+        open_folds = [f for f in range(n_folds) if counts[f] < capacity]
+        # Prefer folds with fewer patients first so no fold ends up smaller than floor(N/K).
+        min_count = min(counts[f] for f in open_folds)
+        candidates = [f for f in open_folds if counts[f] == min_count]
+        fold = min(candidates, key=lambda f: volumes[f])
+        counts[fold] += 1
+        volumes[fold] += vox
+        rows.append(
+            {"patient_uid": rec.patient_uid, "patient_id": rec.patient_id, "source": rec.source, "fold": fold}
+        )
+    return rows
+
+
 def create_cv_folds(
     records: Sequence[PatientRecord],
     n_folds: int,
     seed: int = 42,
     balance_by_source: bool = True,
+    balance_by_lesion_volume: bool = False,
 ) -> pd.DataFrame:
     """Create patient-level CV fold assignment.
 
-    One patient can only appear in one fold.
+    One patient can only appear in one fold. With balance_by_lesion_volume the total
+    lesion volume per fold is equalized (fold sizes differ by at most one patient).
     """
-
     if n_folds <= 1:
         raise ValueError("n_folds must be > 1")
 
@@ -37,6 +72,10 @@ def create_cv_folds(
             source_buckets.setdefault(rec.source, []).append(rec)
     else:
         source_buckets = {"all": list(records)}
+
+    if balance_by_lesion_volume:
+        rows = _assign_balanced_by_lesion(source_buckets, n_folds, rng)
+        return pd.DataFrame(rows).sort_values(["fold", "source", "patient_id"]).reset_index(drop=True)
 
     rows = []
     # Rotate starting fold per source bucket to avoid leaving higher-index folds empty
@@ -259,7 +298,14 @@ def write_fold_statistics_summary(stats_df: pd.DataFrame, output_txt: Path) -> N
     lines.append(f"patients_total: {int(stats_df['patients'].sum())}")
     lines.append("")
 
-    for metric in ["patients", "total_slices", "lesion_voxel_fraction", "total_lesion_components_3d"]:
+    for metric in [
+        "patients",
+        "total_slices",
+        "total_lesion_voxels",
+        "total_lesion_slices",
+        "lesion_voxel_fraction",
+        "total_lesion_components_3d",
+    ]:
         vals = stats_df[metric].to_numpy(dtype=np.float64)
         lines.append(f"{metric}:")
         lines.append(f"  min={vals.min():.6f}")

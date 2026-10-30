@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional TXT path for aggregate balance summary (default: <output>_stats_summary.txt)",
     )
     p.add_argument(
+        "--balance-lesion-volume",
+        action="store_true",
+        help="Equalize total lesion volume across folds (greedy, fold sizes differ by at most 1).",
+    )
+    p.add_argument(
         "--compute-lesion-components",
         action="store_true",
         help="Compute 3D connected components in masks as lesion-count proxy (slower).",
@@ -103,7 +108,13 @@ def main() -> None:
             f"Lower --n-folds or increase dataset size."
         )
 
-    df = create_cv_folds(records, n_folds=args.n_folds, seed=args.seed, balance_by_source=True)
+    df = create_cv_folds(
+        records,
+        n_folds=args.n_folds,
+        seed=args.seed,
+        balance_by_source=True,
+        balance_by_lesion_volume=bool(args.balance_lesion_volume),
+    )
     save_folds_csv(df, output_path)
 
     stats_df = build_fold_statistics(

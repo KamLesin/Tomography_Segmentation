@@ -105,7 +105,7 @@ def _build_records_from_cect_files(
             continue
         grouped[patient_id]["images"][phase_slot] = path.resolve()
 
-    # Prefer tumor/lesion masks when available.
+    # Tumor/lesion masks only; liver masks are intentionally never used as targets.
     mask_dir = cect_root / "mask_files"
     if mask_dir.exists():
         for path in mask_dir.rglob("*.nii*"):
@@ -119,22 +119,6 @@ def _build_records_from_cect_files(
             if phase_slot is None:
                 continue
             grouped[patient_id]["masks"][phase_slot] = path.resolve()
-
-    # Fallback to liver masks only where phase mask is missing.
-    liver_dir = cect_root / "liver_mask_files"
-    if liver_dir.exists():
-        for path in liver_dir.rglob("*.nii*"):
-            stem = _strip_nii_suffix(path.name)
-            m = re.match(r"^(?P<pid>[^_]+)-?livermask_(?P<phase>.+)$", stem, flags=re.IGNORECASE)
-            if not m:
-                continue
-            patient_id = str(m.group("pid"))
-            phase_name = str(m.group("phase"))
-            phase_slot = _to_phase_slot(phase_name, candidates)
-            if phase_slot is None:
-                continue
-            if grouped[patient_id]["masks"].get(phase_slot) is None:
-                grouped[patient_id]["masks"][phase_slot] = path.resolve()
 
     return _finalize_grouped_records(grouped, "cect", required_slots, missing_phase_strategy)
 
@@ -307,6 +291,10 @@ def _finalize_grouped_records(
     for patient_id, values in grouped.items():
         images = {slot: values["images"].get(slot) for slot in ("A", "PV", "D")}
         masks = {slot: values["masks"].get(slot) for slot in ("A", "PV", "D")}
+
+        # Training/validation only on lesions: skip patients without any existing lesion mask.
+        if not any(p is not None and p.exists() for p in masks.values()):
+            continue
 
         if missing_phase_strategy == "drop":
             if any(images.get(slot) is None for slot in required_slots):
@@ -658,7 +646,7 @@ class MultiphaseSliceDataset(Dataset):
             mask_vol = self._load_volume(mask_path, is_mask=True)
             mask_slice = mask_vol[:, :, int(np.clip(z, 0, mask_vol.shape[2] - 1))]
         else:
-            mask_slice = np.zeros((h, w), dtype=np.float32)
+            raise RuntimeError(f"No lesion mask available for patient {rec.patient_uid}")
 
         x = torch.from_numpy(np.stack(phase_tensors, axis=0))  # [3, 5, H, W]
         y = torch.from_numpy(mask_slice[None, :, :].astype(np.float32))  # [1, H, W]
