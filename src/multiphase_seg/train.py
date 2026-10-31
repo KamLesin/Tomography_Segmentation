@@ -15,8 +15,9 @@ from tqdm import tqdm
 import yaml
 
 from .data import MultiphaseSliceDataset, build_patient_records, canonicalize_patient_uid
+from .evaluation import evaluate_patients_native
 from .losses import bce_dice_loss
-from .metrics import dice_coefficient
+from .metrics import PatientDiceAccumulator, confusion_counts, dice_from_counts
 from .model import MultiphaseLateFusionUNet
 
 
@@ -79,7 +80,7 @@ def _build_dataloaders(cfg: Dict[str, Any], fold: int, folds_df: pd.DataFrame):
         image_size=tuple(data_cfg.get("image_size", [320, 320])),
         context_slices=int(data_cfg.get("context_slices", 2)),
         hu_window=tuple(data_cfg.get("hu_window", [-200.0, 300.0])),
-        max_slices_per_patient=data_cfg.get("max_val_slices_per_patient"),
+        max_slices_per_patient=None,  # patient-level Dice needs every slice of each validation patient
         cache_items=int(data_cfg.get("cache_items", 8)),
         cache_enabled=bool(data_cfg.get("training_cache_enabled", False)),
         cache_root=Path(data_cfg["training_cache_root"]) if data_cfg.get("training_cache_root") else None,
@@ -178,7 +179,7 @@ def _run_epoch(
     model.train(is_train)
 
     losses = []
-    dices = []
+    counts = np.zeros(3, dtype=np.float64)
     cache_hits = []
 
     scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled and is_train)
@@ -206,16 +207,53 @@ def _run_epoch(
             scaler.step(optimizer)
             scaler.update()
 
-        dice = dice_coefficient(logits.detach(), y)
+        tp, fp, fn = confusion_counts(logits.detach(), y)
+        counts += np.array([tp.sum().item(), fp.sum().item(), fn.sum().item()])
         losses.append(float(loss.detach().cpu()))
-        dices.append(float(dice.detach().cpu()))
 
     cache_hit_rate = float(np.mean(cache_hits)) if cache_hits else float("nan")
     return (
         float(np.mean(losses)) if losses else float("nan"),
-        float(np.mean(dices)) if dices else float("nan"),
+        dice_from_counts(*counts) if losses else float("nan"),  # pooled over the whole epoch
         cache_hit_rate,
     )
+
+
+@torch.no_grad()
+def _evaluate_patients(
+    model: torch.nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    dice_weight: float,
+    amp_enabled: bool,
+    eval_phase_override: Optional[str] = None,
+    show_progress: bool = True,
+    progress_label: Optional[str] = None,
+):
+    """Validation with one pooled Dice per patient (all slices, model resolution)."""
+    model.eval()
+    losses = []
+    cache_hits = []
+    acc = PatientDiceAccumulator()
+
+    for batch in tqdm(loader, leave=False, disable=not show_progress, desc=progress_label):
+        x = batch["phases"].to(device, non_blocking=True)
+        y = batch["mask"].to(device, non_blocking=True)
+        phase_present = batch["phase_present"].to(device, non_blocking=True) > 0.5
+        phase_present = _apply_eval_phase_override(phase_present, eval_phase_override)
+        cache_hit = batch.get("cache_hit")
+        if cache_hit is not None:
+            cache_hits.extend(cache_hit.detach().cpu().view(-1).tolist())
+
+        with torch.cuda.amp.autocast(enabled=amp_enabled):
+            logits = model(x, phase_present=phase_present)
+            loss = bce_dice_loss(logits, y, dice_weight=dice_weight)
+        losses.append(float(loss.detach().cpu()))
+        acc.update(batch["patient_uid"], logits.detach().float(), y)
+
+    per_patient = acc.dice_per_patient()
+    cache_hit_rate = float(np.mean(cache_hits)) if cache_hits else float("nan")
+    return float(np.mean(losses)) if losses else float("nan"), per_patient, cache_hit_rate
 
 
 def run_fold_training(
@@ -299,18 +337,19 @@ def run_fold_training(
                 progress_label=f"train fold {fold:02d} epoch {epoch:03d}/{epochs}",
             )
 
-            with torch.no_grad():
-                val_loss, val_dice, val_cache_hit_rate = _run_epoch(
-                    model,
-                    dl_val,
-                    optimizer=None,
-                    device=device,
-                    dice_weight=dice_weight,
-                    amp_enabled=amp_enabled,
-                    eval_phase_override=eval_phase_override,
-                    show_progress=show_batch_progress,
-                    progress_label=f"val fold {fold:02d} epoch {epoch:03d}/{epochs}",
-                )
+            val_loss, val_patient_dice, val_cache_hit_rate = _evaluate_patients(
+                model,
+                dl_val,
+                device=device,
+                dice_weight=dice_weight,
+                amp_enabled=amp_enabled,
+                eval_phase_override=eval_phase_override,
+                show_progress=show_batch_progress,
+                progress_label=f"val fold {fold:02d} epoch {epoch:03d}/{epochs}",
+            )
+            patient_values = np.array(list(val_patient_dice.values()), dtype=np.float64)
+            val_dice = float(patient_values.mean())  # mean of per-patient Dice
+            val_dice_median = float(np.median(patient_values))
 
             scheduler.step()
 
@@ -321,6 +360,7 @@ def run_fold_training(
                 "train_cache_hit_rate": train_cache_hit_rate,
                 "val_loss": val_loss,
                 "val_dice": val_dice,
+                "val_dice_median": val_dice_median,
                 "val_cache_hit_rate": val_cache_hit_rate,
                 "lr": float(optimizer.param_groups[0]["lr"]),
             }
@@ -353,6 +393,30 @@ def run_fold_training(
             "history_path": str(history_path),
             "output_dir": str(out_fold),
         }
+
+        if bool(train_cfg.get("final_native_eval", True)):
+            state = torch.load(out_fold / "best.pt", map_location=device)
+            model.load_state_dict(state["model"])
+            native_df = evaluate_patients_native(
+                model,
+                dl_val.dataset.records,
+                cfg["data"],
+                device,
+                eval_phase_override=eval_phase_override,
+                batch_size=int(train_cfg["batch_size"]),
+                amp_enabled=amp_enabled,
+            )
+            native_df.insert(0, "fold", fold)
+            native_df.to_csv(out_fold / "val_patient_metrics.csv", index=False)
+            result.update(
+                {
+                    "mean_dice_native": float(native_df["dice_native"].mean()),
+                    "median_dice_native": float(native_df["dice_native"].median()),
+                    "mean_hd95_mm": float(native_df["hd95_mm"].mean()),
+                    "mean_lesion_recall": float(native_df["lesion_recall"].mean()),
+                    "mean_lesion_precision": float(native_df["lesion_precision"].mean()),
+                }
+            )
 
         with open(out_fold / "result.json", "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)

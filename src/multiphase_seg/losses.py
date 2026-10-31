@@ -4,15 +4,12 @@ import torch
 import torch.nn.functional as F
 
 
-def soft_dice_loss(logits: torch.Tensor, targets: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+def soft_dice_loss(logits: torch.Tensor, targets: torch.Tensor, smooth: float = 1.0) -> torch.Tensor:
+    # Pooled over the whole batch so empty slices do not each count as a full Dice term.
     probs = torch.sigmoid(logits)
-    probs = probs.flatten(1)
-    targets = targets.flatten(1)
-
-    intersection = (probs * targets).sum(dim=1)
-    union = probs.sum(dim=1) + targets.sum(dim=1)
-    dice = (2.0 * intersection + eps) / (union + eps)
-    return 1.0 - dice.mean()
+    intersection = (probs * targets).sum()
+    union = probs.sum() + targets.sum()
+    return 1.0 - (2.0 * intersection + smooth) / (union + smooth)
 
 
 def bce_dice_loss(logits: torch.Tensor, targets: torch.Tensor, dice_weight: float = 0.5) -> torch.Tensor:

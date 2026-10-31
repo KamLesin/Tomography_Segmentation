@@ -25,7 +25,6 @@ data:
   image_size: [320, 320]
   hu_window: [-200.0, 300.0]
   max_train_slices_per_patient: 80
-  max_val_slices_per_patient: 120
   cache_items: 8
 
 train:
