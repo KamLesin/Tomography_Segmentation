@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Any, Dict
 
 import torch
 from torch import nn
 
-from .decoder import UNetStyleDecoder
+from .decoder import InputSkip, UNetStyleDecoder
 from .encoders import PhaseEncoders
 from .fusion import MultiScaleFusion
 
@@ -23,6 +23,9 @@ class MultiphaseLateFusionUNet(nn.Module):
         attention_heads: int = 8,
         attention_dropout: float = 0.0,
         attention_max_tokens: int | None = 4096,
+        fusion_projection: bool = False,
+        full_res_skip: bool = False,
+        full_res_channels: int = 32,
     ) -> None:
         super().__init__()
         self.encoder_backbone = encoder_backbone
@@ -38,10 +41,38 @@ class MultiphaseLateFusionUNet(nn.Module):
             num_heads=attention_heads,
             dropout=attention_dropout,
             attention_max_tokens=attention_max_tokens,
+            project=fusion_projection,
         )
 
-        fused_channels = [3 * c for c in self.encoders.feature_channels]
-        self.decoder = UNetStyleDecoder(fused_channels=fused_channels, out_channels=out_channels)
+        if fusion_projection:
+            fused_channels = list(self.encoders.feature_channels)
+        else:
+            fused_channels = [3 * c for c in self.encoders.feature_channels]
+
+        self.input_skip = InputSkip(3 * in_channels_per_phase, full_res_channels) if full_res_skip else None
+        self.decoder = UNetStyleDecoder(
+            fused_channels=fused_channels,
+            out_channels=out_channels,
+            full_res_channels=full_res_channels if full_res_skip else None,
+        )
+
+    @classmethod
+    def from_config(cls, model_cfg: Dict[str, Any]) -> "MultiphaseLateFusionUNet":
+        # New-architecture flags default to False so checkpoints from older runs still load.
+        max_tokens = model_cfg.get("attention_max_tokens", 4096)
+        return cls(
+            in_channels_per_phase=int(model_cfg.get("in_channels_per_phase", 5)),
+            out_channels=int(model_cfg.get("out_channels", 1)),
+            pretrained_encoder=bool(model_cfg.get("pretrained_encoder", False)),
+            encoder_backbone=str(model_cfg.get("encoder_backbone", "resnet34")),
+            fusion_mode=str(model_cfg.get("fusion_mode", "cross_attention")),
+            attention_heads=int(model_cfg.get("attention_heads", 8)),
+            attention_dropout=float(model_cfg.get("attention_dropout", 0.0)),
+            attention_max_tokens=None if max_tokens is None else int(max_tokens),
+            fusion_projection=bool(model_cfg.get("fusion_projection", False)),
+            full_res_skip=bool(model_cfg.get("full_res_skip", False)),
+            full_res_channels=int(model_cfg.get("full_res_channels", 32)),
+        )
 
     def forward(self, x: torch.Tensor, phase_present: torch.Tensor | None = None) -> torch.Tensor:
         if x.ndim != 5:
@@ -56,7 +87,12 @@ class MultiphaseLateFusionUNet(nn.Module):
 
         feats_a, feats_pv, feats_d = self.encoders(phase_a, phase_pv, phase_d, phase_present=phase_present)
         fused = self.fusion(feats_a, feats_pv, feats_d, phase_present=phase_present)
-        return self.decoder(fused)
+
+        full_res = None
+        if self.input_skip is not None:
+            masked = x * phase_present.to(x.dtype).view(x.shape[0], 3, 1, 1, 1)
+            full_res = self.input_skip(masked.flatten(1, 2))
+        return self.decoder(fused, full_res)
 
     @torch.no_grad()
     def describe(self) -> Dict[str, str]:

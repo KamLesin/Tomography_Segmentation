@@ -39,21 +39,7 @@ def load_yaml(path: Path) -> Dict[str, Any]:
 def build_model_from_cfg(cfg: Dict[str, Any]):
     from multiphase_seg.model import MultiphaseLateFusionUNet
 
-    model_cfg = cfg.get("model", {})
-    return MultiphaseLateFusionUNet(
-        in_channels_per_phase=int(model_cfg.get("in_channels_per_phase", 5)),
-        out_channels=int(model_cfg.get("out_channels", 1)),
-        pretrained_encoder=bool(model_cfg.get("pretrained_encoder", False)),
-        encoder_backbone=str(model_cfg.get("encoder_backbone", "resnet34")),
-        fusion_mode=str(model_cfg.get("fusion_mode", "cross_attention")),
-        attention_heads=int(model_cfg.get("attention_heads", 8)),
-        attention_dropout=float(model_cfg.get("attention_dropout", 0.0)),
-        attention_max_tokens=(
-            None
-            if model_cfg.get("attention_max_tokens") is None
-            else int(model_cfg.get("attention_max_tokens", 4096))
-        ),
-    )
+    return MultiphaseLateFusionUNet.from_config(cfg.get("model", {}))
 
 
 def build_records_from_cfg(

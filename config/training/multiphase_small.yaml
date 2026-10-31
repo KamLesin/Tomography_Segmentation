@@ -10,6 +10,9 @@ model:
   attention_max_tokens: 1024   # skip attention on very large maps to avoid OOM
   attention_heads: 8
   attention_dropout: 0.0
+  fusion_projection: true        # 1x1 conv reduces 3C -> C per scale
+  full_res_skip: true            # H/1 skip from the raw input (classic U-Net)
+  full_res_channels: 32
 
 data:
   mode: mixed                    # cect | full | mixed

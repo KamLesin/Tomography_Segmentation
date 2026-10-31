@@ -108,6 +108,9 @@ class MultiScaleFusion(nn.Module):
     Modes:
     - cross_attention: apply pairwise cross-attention before concatenation.
     - concat: no attention, direct concatenation for ablation.
+
+    With project=True each scale is reduced back to C channels (1x1 conv) after
+    concatenation, so decoder skips carry C instead of 3C channels.
     """
 
     def __init__(
@@ -117,12 +120,27 @@ class MultiScaleFusion(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.0,
         attention_max_tokens: int | None = 4096,
+        project: bool = False,
     ) -> None:
         super().__init__()
         self.mode = mode
+        self.project = project
 
         if mode not in {"cross_attention", "concat"}:
             raise ValueError(f"Unsupported fusion mode: {mode}")
+
+        self.proj = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv2d(3 * c, c, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(c),
+                    nn.ReLU(inplace=True),
+                )
+                if project
+                else nn.Identity()
+                for c in channels_per_scale
+            ]
+        )
 
         if mode == "cross_attention":
             self.blocks = nn.ModuleList([
@@ -148,5 +166,5 @@ class MultiScaleFusion(nn.Module):
         for idx, (fa, fpv, fd) in enumerate(zip(feats_a, feats_pv, feats_d)):
             if self.mode == "cross_attention":
                 fa, fpv, fd = self.blocks[idx](fa, fpv, fd, phase_present)
-            fused.append(torch.cat([fa, fpv, fd], dim=1))
+            fused.append(self.proj[idx](torch.cat([fa, fpv, fd], dim=1)))
         return fused
