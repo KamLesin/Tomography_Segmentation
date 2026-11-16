@@ -19,13 +19,11 @@ import copy
 import json
 from datetime import datetime
 from pathlib import Path
-import shutil
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import time
 
-import numpy as np
 import pandas as pd
 import yaml
 
@@ -48,7 +46,7 @@ def save_yaml(data: Dict[str, Any], path: Path) -> None:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 
-def create_tuning_grid() -> List[Dict[str, Any]]:
+def create_tuning_grid(base_batch_size: int = 16) -> List[Dict[str, Any]]:
     """
     Define hyperparameter search grid.
     
@@ -67,11 +65,10 @@ def create_tuning_grid() -> List[Dict[str, Any]]:
         })
     
     # GRID 2: Batch size (accounting for available VRAM)
-    for batch_size, accum_steps in [(10, 1), (8, 2), (6, 3)]:
+    for batch_size in sorted({max(1, round(base_batch_size * factor)) for factor in (0.75, 1.0, 1.25)}):
         grid.append({
-            "name": f"batch_{batch_size}_accum_{accum_steps}",
+            "name": f"batch_{batch_size}",
             "train.batch_size": batch_size,
-            "train.accumulation_steps": accum_steps,
         })
     
     # GRID 3: Weight decay
@@ -196,19 +193,27 @@ def run_tuning(args: argparse.Namespace) -> None:
     base_config = load_yaml(args.base_config)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if (output_dir / "tuning_summary.json").exists():
+        raise FileExistsError(f"Existing tuning run in {output_dir}; choose a new output directory")
+    if "accumulation_steps" in base_config["train"]:
+        raise ValueError("train.accumulation_steps is not supported by this trainer; remove it from the config")
     
     # Load folds CSV to get fold count
     folds_df = pd.read_csv(args.folds_csv)
     all_folds = sorted(folds_df["fold"].unique())
-    if args.max_folds:
+    if args.max_folds is not None:
+        if args.max_folds < 1:
+            raise ValueError("--max-folds must be at least 1")
         all_folds = all_folds[:args.max_folds]
+    if not all_folds:
+        raise ValueError("No folds available in manifest")
     
     print(f"[HPT] Loaded {len(all_folds)} folds from {args.folds_csv}")
     print(f"[HPT] Base config: {args.base_config}")
     print(f"[HPT] GPUs: {args.gpus}")
     
     # Generate tuning grid
-    grid = create_tuning_grid()
+    grid = create_tuning_grid(int(base_config["train"]["batch_size"]))
     
     # Filter by skip_grids or only_grids
     if args.skip_grids:
@@ -220,6 +225,8 @@ def run_tuning(args: argparse.Namespace) -> None:
         grid = [g for g in grid if any(only_name in g["name"] for only_name in only)]
     
     print(f"[HPT] Tuning grid size: {len(grid)} configurations")
+    if not grid:
+        raise ValueError("No configurations selected")
     
     # Tracking
     summary_file = output_dir / "tuning_summary.json"
@@ -253,50 +260,35 @@ def run_tuning(args: argparse.Namespace) -> None:
             "--gpus", args.gpus,
             "--python", args.python,
         ]
+        if args.max_folds is not None:
+            cmd.extend(["--max-folds", str(args.max_folds)])
         
-        try:
-            start_config_time = time.time()
-            result = subprocess.run(
-                cmd,
-                cwd=str(ROOT),
-                capture_output=False,
-                text=True,
-                timeout=None,  # No timeout for overnight runs
-            )
-            elapsed_config_time = time.time() - start_config_time
-            
-            status = "success" if result.returncode == 0 else "failed"
-            print(f"\n[HPT] {config_name}: {status.upper()} (took {elapsed_config_time/3600:.1f}h)")
-            
-            results.append({
-                "grid_idx": grid_idx,
-                "config_name": config_name,
-                "status": status,
-                "elapsed_seconds": elapsed_config_time,
-                "overrides": {k: v for k, v in grid_config.items() if k != "name"},
-            })
-            
-        except subprocess.TimeoutExpired:
-            print(f"\n[HPT] {config_name}: TIMEOUT")
-            results.append({
-                "grid_idx": grid_idx,
-                "config_name": config_name,
-                "status": "timeout",
-                "overrides": {k: v for k, v in grid_config.items() if k != "name"},
-            })
-        except Exception as e:
-            print(f"\n[HPT] {config_name}: ERROR - {e}")
-            results.append({
-                "grid_idx": grid_idx,
-                "config_name": config_name,
-                "status": "error",
-                "error": str(e),
-                "overrides": {k: v for k, v in grid_config.items() if k != "name"},
-            })
-        
-        # Save intermediate results
+        entry = {
+            "grid_idx": grid_idx,
+            "config_name": config_name,
+            "status": "in_progress",
+            "folds": [int(fold) for fold in all_folds],
+            "overrides": {k: v for k, v in grid_config.items() if k != "name"},
+        }
+        results.append(entry)
         with open(summary_file, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, default=str)
+        start_config_time = time.time()
+        try:
+            result = subprocess.run(cmd, cwd=str(ROOT), check=False)
+        except OSError as exc:
+            entry.update(status="failed", error=str(exc))
+            with open(summary_file, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2)
+            raise
+        entry["elapsed_seconds"] = time.time() - start_config_time
+        entry["status"] = "success" if result.returncode == 0 else "failed"
+        entry["returncode"] = result.returncode
+        with open(summary_file, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2)
+        print(f"\n[HPT] {config_name}: {entry['status'].upper()} (took {entry['elapsed_seconds']/3600:.1f}h)", flush=True)
+        if result.returncode:
+            raise RuntimeError(f"Configuration {config_name} failed; see fold launcher logs")
     
     # Final summary
     total_time = datetime.now() - start_time

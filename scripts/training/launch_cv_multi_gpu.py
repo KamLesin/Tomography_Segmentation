@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", type=Path, default=Path("runs/multiphase_cv"))
     p.add_argument("--gpus", type=str, default="0,1,2,3,4,5,6,7")
     p.add_argument("--python", type=str, default=sys.executable)
+    p.add_argument("--max-folds", type=int, default=None, help="Run the first N folds without changing the training split")
     return p.parse_args()
 
 
@@ -122,6 +123,10 @@ def main() -> None:
     if "fold" not in df.columns:
         raise ValueError(f"Missing required 'fold' column in folds CSV: {args.folds_csv}")
     folds = sorted(df["fold"].unique().tolist())
+    if args.max_folds is not None:
+        if args.max_folds < 1:
+            raise ValueError("--max-folds must be at least 1")
+        folds = folds[:args.max_folds]
     if not folds:
         raise ValueError(
             f"No unique fold IDs found in {args.folds_csv}. Check the CSV content and generation step."

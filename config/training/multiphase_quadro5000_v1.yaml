@@ -1,7 +1,6 @@
 # Configuration for 4x Nvidia RTX Quadro 5000 16GB
 # Scaled down from multiphase_default.yaml (8x RTX Quadro 6000 24GB)
-# VRAM: ~16GB per GPU vs 24GB => batch_size reduced by ~30%
-# Accumulation steps increased to maintain effective batch size for gradient stability
+# Starting point only: validate peak GPU memory on the target machine.
 
 experiment_name: multiphase_2p5d_latefusion_quadro5000
 seed: 42
@@ -37,8 +36,7 @@ data:
 
 train:
   epochs: 40
-  batch_size: 10                 # reduced from 16 (16 * 10/16 = 10 per GPU)
-  accumulation_steps: 1          # can increase to 2 for gradient stability if needed
+  batch_size: 16                 # per GPU; increase only after measuring peak VRAM
   lr: 0.0001
   min_lr: 0.000001
   weight_decay: 0.0001

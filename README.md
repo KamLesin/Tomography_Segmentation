@@ -116,6 +116,48 @@ Assignment policy is deterministic: fold `k` goes to GPU index `k % N`.
 
 Current launcher behavior is dynamic: each free GPU pulls the next fold from a shared queue until all folds are finished.
 
+### Hyperparameter tuning on 4 GPUs
+
+The tuning script varies one parameter at a time around a base configuration:
+learning rate, batch size, weight decay, Dice loss weight, attention token
+limit and backbone. The batch-size candidates are 0.75, 1 and 1.25 times the
+base batch size, rounded to integers. Gradient accumulation is not implemented.
+
+```bash
+python -u scripts/training/hyperparameter_tuning.py \
+    --base-config config/training/multiphase_quadro5000_v1.yaml \
+    --folds-csv generated_helper_csv_files/cv_multiphase_folds_cect_tumor_32.csv \
+    --gpus 0,1,2,3 \
+    --max-folds 4 \
+    --output-dir runs/tuning_example
+```
+
+`--max-folds` limits the folds executed, not the patients in each training
+split. Omit it to execute all folds. Each GPU trains a separate fold, so the
+batch size is per process and is not multiplied by the number of GPUs. The
+four-fold example executes up to 68 trainings, not necessarily one night.
+Training aborts on a failed configuration; inspect `tuning_summary.json` and
+the corresponding `cv_results/fold_*/launcher.log`. Use a new output directory
+for another run; existing runs are not resumed.
+
+The 16-sample batch in the Quadro 5000 configuration is an unverified starting
+point, not a 13 GB guarantee. Before an extended search, test on the target
+server and monitor each GPU using `nvidia-smi`; peak usage depends on the
+model, attention settings, data, CUDA and other GPU processes. The batch and
+attention candidates can use more VRAM than the base and may still fail with
+OOM. Adjust the base batch size after measurement.
+
+After a successful run, use:
+
+```bash
+python scripts/training/analyze_tuning_results.py --tuning-dir runs/tuning_example --export-best
+```
+
+The exported config is unchanged for transfer to other hardware; do not
+automatically scale its batch size or learning rate. The validation folds
+used to select the best configuration are not an independent test set.
+Use nested cross-validation or a held-out test set to report unbiased results.
+
 ### 4) Run hypothesis experiments from one CLI entrypoint
 
 The script [scripts/training/run_hypothesis.py](scripts/training/run_hypothesis.py) runs predefined experiment sets and saves:
@@ -183,4 +225,3 @@ Keep generated datasets and temporary outputs out of git. The existing [.gitigno
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
-

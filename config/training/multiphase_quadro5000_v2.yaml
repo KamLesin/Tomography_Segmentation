@@ -1,6 +1,6 @@
 # Configuration for 4x Nvidia RTX Quadro 5000 16GB
 # More aggressive VRAM savings - for heavier hyperparameter tuning
-# batch_size reduced by 50%, num_workers reduced, but with gradient accumulation
+# batch_size reduced by 50% and num_workers reduced
 
 experiment_name: multiphase_2p5d_latefusion_quadro5000_aggressive
 seed: 42
@@ -36,8 +36,7 @@ data:
 
 train:
   epochs: 40
-  batch_size: 8                  # 8 * 4 GPUs = 32 effective (vs 16*8=128 in original)
-  accumulation_steps: 2          # accumulate for gradient stability
+  batch_size: 8                  # per independent GPU training process
   lr: 0.0001
   min_lr: 0.000001
   weight_decay: 0.0001
