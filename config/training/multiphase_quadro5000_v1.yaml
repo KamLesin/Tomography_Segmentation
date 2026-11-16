@@ -9,9 +9,9 @@ model:
   in_channels_per_phase: 5
   out_channels: 1
   pretrained_encoder: false
-  encoder_backbone: resnet34   # resnet34 | resnet18 | efficientnet_b0
+  encoder_backbone: efficientnet_b0   # resnet34 | resnet18 | efficientnet_b0
   fusion_mode: cross_attention   # cross_attention | concat
-  attention_max_tokens: 1536     # reduced from 2048 to save VRAM
+  attention_max_tokens: 2048     # reduced from 2048 to save VRAM
   attention_heads: 8
   attention_dropout: 0.0
   fusion_projection: true        # 1x1 conv reduces 3C -> C per scale

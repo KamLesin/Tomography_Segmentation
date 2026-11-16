@@ -85,20 +85,6 @@ def create_tuning_grid(base_batch_size: int = 16) -> List[Dict[str, Any]]:
             "train.dice_weight": dice_w,
         })
     
-    # GRID 5: Model capacity (attention tokens)
-    for attn_tokens in [1024, 1536, 2048]:
-        grid.append({
-            "name": f"attn_{attn_tokens}",
-            "model.attention_max_tokens": attn_tokens,
-        })
-    
-    # GRID 6: Encoder backbone
-    for backbone in ["resnet18", "resnet34"]:
-        grid.append({
-            "name": f"backbone_{backbone}",
-            "model.encoder_backbone": backbone,
-        })
-    
     return grid
 
 
@@ -172,7 +158,7 @@ def parse_args() -> argparse.Namespace:
         "--skip-grids",
         type=str,
         default="",
-        help="Comma-separated grid names to skip (lr, batch, wd, dice, attn, backbone)",
+        help="Comma-separated grid names to skip (lr, batch, wd, dice)",
     )
     p.add_argument(
         "--only-grids",
