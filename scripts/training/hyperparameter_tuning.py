@@ -46,7 +46,7 @@ def save_yaml(data: Dict[str, Any], path: Path) -> None:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 
-def create_tuning_grid(base_batch_size: int = 16) -> List[Dict[str, Any]]:
+def create_tuning_grid() -> List[Dict[str, Any]]:
     """
     Define hyperparameter search grid.
     
@@ -64,21 +64,14 @@ def create_tuning_grid(base_batch_size: int = 16) -> List[Dict[str, Any]]:
             "train.min_lr": lr / 100,
         })
     
-    # GRID 2: Batch size (accounting for available VRAM)
-    for batch_size in sorted({max(1, round(base_batch_size * factor)) for factor in (0.75, 1.0, 1.25)}):
-        grid.append({
-            "name": f"batch_{batch_size}",
-            "train.batch_size": batch_size,
-        })
-    
-    # GRID 3: Weight decay
+    # GRID 2: Weight decay
     for wd in [0.00005, 0.0001, 0.0005]:
         grid.append({
             "name": f"wd_{wd:.5f}",
             "train.weight_decay": wd,
         })
     
-    # GRID 4: Dice weight in loss
+    # GRID 3: Dice weight in loss
     for dice_w in [0.3, 0.5, 0.7]:
         grid.append({
             "name": f"dice_{dice_w:.1f}",
@@ -158,13 +151,13 @@ def parse_args() -> argparse.Namespace:
         "--skip-grids",
         type=str,
         default="",
-        help="Comma-separated grid names to skip (lr, batch, wd, dice)",
+        help="Comma-separated grid names to skip (lr, wd, dice)",
     )
     p.add_argument(
         "--only-grids",
         type=str,
         default="",
-        help="Only run specified grids (comma-separated)",
+        help="Only run specified grids (comma-separated: lr, wd, dice)",
     )
     return p.parse_args()
 
@@ -199,16 +192,20 @@ def run_tuning(args: argparse.Namespace) -> None:
     print(f"[HPT] GPUs: {args.gpus}")
     
     # Generate tuning grid
-    grid = create_tuning_grid(int(base_config["train"]["batch_size"]))
+    grid = create_tuning_grid()
     
     # Filter by skip_grids or only_grids
-    if args.skip_grids:
-        skip = set(args.skip_grids.split(","))
-        grid = [g for g in grid if not any(skip_name in g["name"] for skip_name in skip)]
-    
-    if args.only_grids:
-        only = set(args.only_grids.split(","))
-        grid = [g for g in grid if any(only_name in g["name"] for only_name in only)]
+    allowed_grids = {"lr", "wd", "dice"}
+    skip = {name.strip() for name in args.skip_grids.split(",") if name.strip()}
+    only = {name.strip() for name in args.only_grids.split(",") if name.strip()}
+    unknown = (skip | only) - allowed_grids
+    if unknown:
+        raise ValueError(f"Unknown grid names: {sorted(unknown)}; choose from {sorted(allowed_grids)}")
+    grid = [
+        g for g in grid
+        if g["name"].split("_", 1)[0] not in skip
+        and (not only or g["name"].split("_", 1)[0] in only)
+    ]
     
     print(f"[HPT] Tuning grid size: {len(grid)} configurations")
     if not grid:
