@@ -36,7 +36,7 @@ data:
 
 train:
   epochs: 40
-  batch_size: 10                 # per GPU; increase only after measuring peak VRAM
+  batch_size: 12                 # per GPU; increase only after measuring peak VRAM
   lr: 0.0001
   min_lr: 0.000001
   weight_decay: 0.0001
