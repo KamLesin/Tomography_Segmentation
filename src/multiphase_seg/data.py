@@ -401,6 +401,8 @@ class MultiphaseSliceDataset(Dataset):
             "cache_dtype": self.cache_dtype,
             "cache_version": self.cache_version,
         }
+        if self.force_phase_input is not None:
+            payload["force_phase_input"] = self.force_phase_input
         payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha1(payload_str.encode("utf-8")).hexdigest()
 
@@ -456,6 +458,8 @@ class MultiphaseSliceDataset(Dataset):
         if int(meta.get("context_slices", -1)) != int(expected["context_slices"]):
             return False
         if list(meta.get("hu_window", [])) != list(expected["hu_window"]):
+            return False
+        if "force_phase_input" not in meta or meta["force_phase_input"] != expected["force_phase_input"]:
             return False
 
         for group in ("images", "masks"):

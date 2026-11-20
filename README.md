@@ -121,7 +121,8 @@ Current launcher behavior is dynamic: each free GPU pulls the next fold from a s
 The tuning script varies one parameter at a time around a base configuration:
 learning rate (and its minimum), weight decay and Dice loss weight. Batch size,
 backbone and attention token limit remain fixed as specified in the base
-configuration. Gradient accumulation is not implemented.
+configuration. The learning-rate candidates are 0.0001 and 0.0002.
+Gradient accumulation is not implemented.
 
 ```bash
 python -u scripts/training/hyperparameter_tuning.py \
@@ -135,7 +136,7 @@ python -u scripts/training/hyperparameter_tuning.py \
 `--max-folds` limits the folds executed, not the patients in each training
 split. Omit it to execute all folds. Each GPU trains a separate fold, so the
 batch size is per process and is not multiplied by the number of GPUs. The
-four-fold example executes up to 36 trainings, not necessarily one night.
+four-fold example executes up to 32 trainings, not necessarily one night.
 Training aborts on a failed configuration; inspect `tuning_summary.json` and
 the corresponding `cv_results/fold_*/launcher.log`. Use a new output directory
 for another run; existing runs are not resumed.
@@ -157,6 +158,24 @@ The exported config is unchanged for transfer to other hardware; do not
 automatically scale its batch size or learning rate. The validation folds
 used to select the best configuration are not an independent test set.
 Use nested cross-validation or a held-out test set to report unbiased results.
+
+To investigate discrepancies between model-resolution and native-resolution
+validation for a saved checkpoint, stop competing GPU work and run from the
+project root:
+
+```bash
+python -u scripts/training/diagnose_validation.py \
+    --config runs/hyperparameter_tuning/lr_0.00010/config.yaml \
+    --folds-csv generated_helper_csv_files/cv_multiphase_folds_cect_tumor_32.csv \
+    --fold 4 --checkpoint runs/hyperparameter_tuning/lr_0.00010/cv_results/fold_04/best.pt \
+    --device cuda:0 --batch-size 2
+```
+
+The diagnostic reads but does not update the cache; it compares cached and
+fresh inputs and reports model-resolution and native-resolution Dice. Run it
+on the machine holding the original data and cache, using the same project
+version that produced the checkpoint. A partial selection with
+`--max-patients` cannot reproduce the original fold-average Dice.
 
 ### 4) Run hypothesis experiments from one CLI entrypoint
 

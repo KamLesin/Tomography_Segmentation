@@ -57,7 +57,7 @@ def create_tuning_grid() -> List[Dict[str, Any]]:
     grid = []
     
     # GRID 1: Learning rate sweep
-    for lr in [0.00005, 0.0001, 0.0002]:
+    for lr in [0.0001, 0.0002]:
         grid.append({
             "name": f"lr_{lr:.5f}",
             "train.lr": lr,
