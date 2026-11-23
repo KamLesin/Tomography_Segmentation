@@ -148,6 +148,13 @@ model, attention settings, data, CUDA and other GPU processes. Even with a
 fixed batch size, an OOM can occur. Adjust the base batch size before tuning
 if measurement indicates insufficient headroom.
 
+For eight 24 GB GPUs, `config/training/multiphase_quadro6000.yaml` keeps the
+same model and 40 epochs but starts with batch size 16 per fold. Verify it on
+the target GPUs; increasing batch size changes optimization and is not
+guaranteed to fit merely because the GPU has more memory. The cosine learning
+rate scheduler uses `train.epochs` as its period, so reducing the tuning
+epochs also changes the learning-rate schedule.
+
 After a successful run, use:
 
 ```bash
